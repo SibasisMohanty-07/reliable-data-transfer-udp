@@ -118,3 +118,26 @@ The same packet format will support:
 3. Selective Repeat
 
 The reliability mechanism is determined by the sender/receiver logic rather than by creating a completely different packet format.
+
+## Sequence Number Rules
+
+The `sequence_number` field identifies the packet number.
+
+For data packets:
+
+- The first packet starts with sequence number 0.
+- Each subsequent data packet increments the sequence number by 1.
+- Sequence numbers are therefore 0, 1, 2, 3, ...
+
+Example:
+
+| Packet | Sequence Number |
+|--------|-----------------|
+| Packet 0 | 0 |
+| Packet 1 | 1 |
+| Packet 2 | 2 |
+| Packet 3 | 3 |
+
+The same sequence-number scheme will be used by Stop-and-Wait,
+Go-Back-N, and Selective Repeat.
+
