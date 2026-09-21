@@ -1,0 +1,120 @@
+# Reliable Data Transfer Protocol
+
+## 1. Packet Format
+
+All three reliability protocols use the same common packet format.
+
+| Field | Size | Purpose |
+|---|---:|---|
+| type | 1 byte | Identifies the packet type, such as DATA or ACK |
+| flags | 1 byte | Protocol control information |
+| sequence_number | 4 bytes | Identifies a DATA packet |
+| acknowledgement_number | 4 bytes | Identifies the packet being acknowledged |
+| payload_length | 2 bytes | Number of valid bytes in the payload |
+| checksum | 2 bytes | Detects corrupted packets |
+| payload | 1024 bytes max | Actual file/data being transferred |
+
+## 2. Packet Types
+
+The initial implementation uses two packet types:
+
+- DATA
+- ACK
+
+Additional packet types such as START and END may be added later if required.
+
+### DATA
+
+A DATA packet carries a portion of the file/data.
+
+It contains:
+- sequence number
+- payload length
+- checksum
+- payload
+
+### ACK
+
+An ACK packet confirms successful reception of a DATA packet.
+
+It contains:
+- acknowledgement number
+- checksum
+
+## 3. Sequence Number Rules
+
+Sequence numbers identify DATA packets.
+
+- Sequence numbers start from 0.
+- Each DATA packet receives the next sequence number.
+- The sequence number increases by 1 for each new DATA packet.
+- Retransmitted packets keep their original sequence number.
+- ACK packets use the acknowledgement number to identify the DATA packet being acknowledged.
+
+Example:
+
+DATA seq=0
+DATA seq=1
+DATA seq=2
+DATA seq=3
+
+## 4. ACK Rules
+
+### Stop-and-Wait
+
+Each DATA packet is acknowledged individually.
+
+Example:
+
+DATA seq=0
+        ↓
+ACK 0
+
+### Go-Back-N
+
+ACKs are cumulative.
+
+For example, if packets 0, 1, 2 and 3 have been received correctly:
+
+ACK 3
+
+means that packets through sequence number 3 have been received correctly.
+
+### Selective Repeat
+
+ACKs are individual.
+
+Example:
+
+DATA seq=0
+DATA seq=1
+DATA seq=2
+
+If packets 0 and 2 are received:
+
+ACK 0
+ACK 2
+
+Packet 1 can be retransmitted separately.
+
+## 5. Checksum
+
+The checksum is used to detect corrupted packets.
+
+The sender calculates the checksum before transmission.
+
+The receiver recalculates the checksum after receiving a packet.
+
+If the values match, the packet is considered valid.
+
+If they do not match, the packet is considered corrupted and is not accepted as valid data.
+
+## 6. Reliability Protocols
+
+The same packet format will support:
+
+1. Stop-and-Wait
+2. Go-Back-N
+3. Selective Repeat
+
+The reliability mechanism is determined by the sender/receiver logic rather than by creating a completely different packet format.
