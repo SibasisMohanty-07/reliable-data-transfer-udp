@@ -141,3 +141,22 @@ Example:
 The same sequence-number scheme will be used by Stop-and-Wait,
 Go-Back-N, and Selective Repeat.
 
+## Maximum Payload Size
+
+The maximum payload size is 1024 bytes.
+
+A file is divided into chunks of at most 1024 bytes.
+Each chunk is carried as the payload of one UDP packet.
+
+For example:
+
+File
+↓
+Split into 1024-byte chunks
+↓
+UDP packets
+
+The final chunk may contain fewer than 1024 bytes.
+
+This limit keeps application-level packets reasonably sized
+and allows large files to be transferred as multiple packets.
