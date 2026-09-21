@@ -184,3 +184,41 @@ use `htons()` before transmission and `ntohs()` after reception.
 This ensures that the packet format is interpreted consistently
 regardless of the host machine's byte order.
 
+## Wire Format
+
+The C `Packet` structure is not sent directly using `sendto()` because
+C structures may contain padding and alignment differences.
+
+The packet is serialized into a byte buffer before transmission.
+
+### Header Layout
+
+| Field | Size |
+|---|---:|
+| Type | 1 byte |
+| Flags | 1 byte |
+| Sequence Number | 4 bytes |
+| Acknowledgement Number | 4 bytes |
+| Payload Length | 2 bytes |
+| Checksum | 2 bytes |
+| Payload | Variable |
+
+### Wire Format
+
+```text
++-----------------------------+
+| Type          | 1 byte      |
++-----------------------------+
+| Flags         | 1 byte      |
++-----------------------------+
+| Sequence No.  | 4 bytes     |
++-----------------------------+
+| ACK No.       | 4 bytes     |
++-----------------------------+
+| Payload Len.  | 2 bytes     |
++-----------------------------+
+| Checksum      | 2 bytes     |
++-----------------------------+
+| Payload       | Variable    |
++-----------------------------+
+
