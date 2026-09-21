@@ -222,3 +222,39 @@ The packet is serialized into a byte buffer before transmission.
 | Payload       | Variable    |
 +-----------------------------+
 
+## Sender Flow — Week 1
+
+The Week 1 sender performs basic file transfer over UDP.
+
+```text
+START
+  |
+  v
+Open input file
+  |
+  v
+Create UDP socket
+  |
+  v
+Read up to MAX_PAYLOAD_SIZE bytes
+  |
+  v
+Construct DATA packet
+  |
+  v
+Serialize packet into wire format
+  |
+  v
+Send UDP packet
+  |
+  v
+More file data?
+  |              |
+ Yes             No
+  |              |
+  v              v
+Read next       Finish
+ chunk
+  |
+  +----> Construct DATA packet
+  
