@@ -160,3 +160,27 @@ The final chunk may contain fewer than 1024 bytes.
 
 This limit keeps application-level packets reasonably sized
 and allows large files to be transferred as multiple packets.
+
+## Byte Order
+
+All multi-byte integer fields in the packet header use network byte order
+(big-endian).
+
+The following functions will be used when serializing and deserializing
+packet fields:
+
+- `htonl()` — host to network order for 32-bit integers
+- `ntohl()` — network to host order for 32-bit integers
+- `htons()` — host to network order for 16-bit integers
+- `ntohs()` — network to host order for 16-bit integers
+
+For example, the `sequence_number` and `acknowledgement_number` fields
+are 32-bit integers and will use `htonl()` before transmission and
+`ntohl()` after reception.
+
+The `payload_length` and `checksum` fields are 16-bit integers and will
+use `htons()` before transmission and `ntohs()` after reception.
+
+This ensures that the packet format is interpreted consistently
+regardless of the host machine's byte order.
+
