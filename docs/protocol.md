@@ -258,3 +258,20 @@ Read next       Finish
   |
   +----> Construct DATA packet
   
+## Receiver Flow — Week 1
+
+The Week 1 receiver performs basic file reception over UDP.
+
+1. Create a UDP socket.
+2. Bind the socket to the receiver port.
+3. Wait for an incoming UDP packet.
+4. Receive the UDP datagram.
+5. Parse the packet according to the defined wire format.
+6. Verify the packet type and checksum.
+7. Extract the payload.
+8. Write the payload to the output file.
+9. Wait for the next packet.
+10. Continue until the file transfer is complete.
+
+There is no ACK, timeout, retransmission, or other reliability
+mechanism implemented in Week 1.
