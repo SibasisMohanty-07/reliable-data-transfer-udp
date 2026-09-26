@@ -1,0 +1,9 @@
+# Compiled object files
+*.o
+
+# Executable files
+*.exe
+
+# Generated test files
+received.txt
+test.txt
