@@ -1,6 +1,6 @@
 #include "checksum.h"
 
-uint16_t calculate_checksum(const void *data, size_t length)
+uint16_t calculate_data_checksum(const void *data, size_t length)
 {
     const uint8_t *bytes = data;
     uint32_t sum = 0;
