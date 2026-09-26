@@ -158,4 +158,3 @@ int stop_and_wait_send(
 
     return -1;
 }
-}
