@@ -16,11 +16,6 @@
 #define TIMEOUT_SEC 2
 #define MAX_RETRIES 5
 
-/*
- * Send one DATA packet and wait for its ACK.
- * If ACK is not received within the timeout,
- * retransmit the packet.
- */
 int stop_and_wait_send(
     SOCKET sockfd,
     struct sockaddr_in *receiver_addr,
@@ -42,7 +37,6 @@ int stop_and_wait_send(
 
     for (int attempt = 1; attempt <= MAX_RETRIES; attempt++)
     {
-        /* Send DATA packet */
         int sent = sendto(
             sockfd,
             (const char *)buffer,
@@ -64,7 +58,6 @@ int stop_and_wait_send(
             attempt
         );
 
-        /* Wait for ACK */
         fd_set readfds;
         FD_ZERO(&readfds);
         FD_SET(sockfd, &readfds);
@@ -81,7 +74,6 @@ int stop_and_wait_send(
             &timeout
         );
 
-        /* Timeout */
         if (result == 0)
         {
             printf(
@@ -93,14 +85,12 @@ int stop_and_wait_send(
             continue;
         }
 
-        /* Error */
         if (result < 0)
         {
             printf("select() failed\n");
             return -1;
         }
 
-        /* ACK received */
         if (FD_ISSET(sockfd, &readfds))
         {
             uint8_t ack_buffer[14 + MAX_PAYLOAD_SIZE];
@@ -139,8 +129,14 @@ int stop_and_wait_send(
                 continue;
             }
 
+            if (!verify_checksum(&ack))
+            {
+                printf("Invalid ACK checksum\n");
+                continue;
+            }
+
             if (ack.type == PACKET_ACK &&
-                ack.sequence_number ==
+                ack.acknowledgement_number ==
                     packet->sequence_number)
             {
                 printf(
@@ -161,4 +157,5 @@ int stop_and_wait_send(
     );
 
     return -1;
+}
 }
