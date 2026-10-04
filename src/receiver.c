@@ -16,6 +16,9 @@
 
 #define SERVER_PORT 9000
 
+#define LOST_ACK_1 2
+#define LOST_ACK_2 3
+
 int main()
 {
 #ifdef _WIN32
@@ -28,7 +31,11 @@ int main()
     }
 #endif
 
+#ifdef _WIN32
     SOCKET sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+#else
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+#endif
 
 #ifdef _WIN32
     if (sockfd == INVALID_SOCKET)
@@ -53,9 +60,10 @@ int main()
     receiver_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     receiver_addr.sin_port = htons(SERVER_PORT);
 
-    if (bind(sockfd,
-             (struct sockaddr *)&receiver_addr,
-             sizeof(receiver_addr)) < 0)
+    if (bind(
+            sockfd,
+            (struct sockaddr *)&receiver_addr,
+            sizeof(receiver_addr)) < 0)
     {
         printf("bind failed\n");
 
@@ -69,8 +77,9 @@ int main()
         return 1;
     }
 
-    printf("Receiver started on port %d...\n",
-           SERVER_PORT);
+    printf(
+        "Receiver started on port %d...\n",
+        SERVER_PORT);
 
     FILE *file = fopen("received.txt", "wb");
 
@@ -122,34 +131,27 @@ int main()
 
         Packet packet;
 
-        if (parse_packet(receive_buffer,
-                         received,
-                         &packet) != 0)
+        if (parse_packet(
+                receive_buffer,
+                received,
+                &packet) != 0)
         {
             printf("Invalid packet received\n");
             continue;
         }
 
-        /*
-         * Verify checksum.
-         */
         if (!verify_checksum(&packet))
         {
             printf("Checksum verification failed\n");
             continue;
         }
 
-        /*
-         * DATA packet.
-         */
         if (packet.type == PACKET_DATA)
         {
-            printf("Received DATA packet %u\n",
-                   packet.sequence_number);
+            printf(
+                "Received DATA packet %u\n",
+                packet.sequence_number);
 
-            /*
-             * Correct packet.
-             */
             if (packet.sequence_number == expected_sequence)
             {
                 size_t written = fwrite(
@@ -164,12 +166,12 @@ int main()
                     break;
                 }
 
-                printf("Accepted DATA packet %u\n",
-                       packet.sequence_number);
+                printf(
+                    "Accepted DATA packet %u\n",
+                    packet.sequence_number);
 
-                /*
-                 * Create ACK.
-                 */
+                expected_sequence++;
+
                 Packet ack_packet;
 
                 initialize_packet(&ack_packet);
@@ -178,14 +180,62 @@ int main()
                 ack_packet.flags = FLAG_NONE;
                 ack_packet.sequence_number = 0;
                 ack_packet.acknowledgement_number =
-                    packet.sequence_number;
+                    expected_sequence - 1;
                 ack_packet.payload_length = 0;
 
                 ack_packet.checksum =
                     calculate_checksum(&ack_packet);
 
-                uint8_t ack_buffer[
-                    14 + MAX_PAYLOAD_SIZE];
+                uint8_t ack_buffer[14 + MAX_PAYLOAD_SIZE];
+
+                int ack_size = serialize_packet(
+                    &ack_packet,
+                    ack_buffer,
+                    sizeof(ack_buffer));
+
+                if (packet.sequence_number == LOST_ACK_1 ||
+                    packet.sequence_number == LOST_ACK_2)
+                {
+                    printf(
+                        "Simulated lost ACK for packet %u\n",
+                        packet.sequence_number);
+                }
+                else
+                {
+                    sendto(
+                        sockfd,
+                        (const char *)ack_buffer,
+                        ack_size,
+                        0,
+                        (struct sockaddr *)&sender_addr,
+                        sender_len);
+
+                    printf(
+                        "Sent cumulative ACK for packet %u\n",
+                        expected_sequence - 1);
+                }
+            }
+            else if (packet.sequence_number < expected_sequence)
+            {
+                printf(
+                    "Duplicate DATA packet %u\n",
+                    packet.sequence_number);
+
+                Packet ack_packet;
+
+                initialize_packet(&ack_packet);
+
+                ack_packet.type = PACKET_ACK;
+                ack_packet.flags = FLAG_NONE;
+                ack_packet.sequence_number = 0;
+                ack_packet.acknowledgement_number =
+                    expected_sequence - 1;
+                ack_packet.payload_length = 0;
+
+                ack_packet.checksum =
+                    calculate_checksum(&ack_packet);
+
+                uint8_t ack_buffer[14 + MAX_PAYLOAD_SIZE];
 
                 int ack_size = serialize_packet(
                     &ack_packet,
@@ -200,25 +250,18 @@ int main()
                     (struct sockaddr *)&sender_addr,
                     sender_len);
 
-                printf("Sent ACK for packet %u\n",
-                       packet.sequence_number);
-
-                expected_sequence++;
+                printf(
+                    "Re-sent cumulative ACK for packet %u\n",
+                    expected_sequence - 1);
             }
             else
             {
-                /*
-                 * Duplicate packet.
-                 *
-                 * Send ACK again, but don't write
-                 * the payload a second time.
-                 */
-                if (packet.sequence_number <
-                    expected_sequence)
-                {
-                    printf("Duplicate DATA packet %u\n",
-                           packet.sequence_number);
+                printf(
+                    "Out-of-order DATA packet %u\n",
+                    packet.sequence_number);
 
+                if (expected_sequence > 0)
+                {
                     Packet ack_packet;
 
                     initialize_packet(&ack_packet);
@@ -226,17 +269,14 @@ int main()
                     ack_packet.type = PACKET_ACK;
                     ack_packet.flags = FLAG_NONE;
                     ack_packet.sequence_number = 0;
-
                     ack_packet.acknowledgement_number =
-                        packet.sequence_number;
-
+                        expected_sequence - 1;
                     ack_packet.payload_length = 0;
 
                     ack_packet.checksum =
                         calculate_checksum(&ack_packet);
 
-                    uint8_t ack_buffer[
-                        14 + MAX_PAYLOAD_SIZE];
+                    uint8_t ack_buffer[14 + MAX_PAYLOAD_SIZE];
 
                     int ack_size = serialize_packet(
                         &ack_packet,
@@ -251,15 +291,12 @@ int main()
                         (struct sockaddr *)&sender_addr,
                         sender_len);
 
-                    printf("Re-sent ACK for packet %u\n",
-                           packet.sequence_number);
+                    printf(
+                        "Sent cumulative ACK for packet %u\n",
+                        expected_sequence - 1);
                 }
             }
         }
-
-        /*
-         * FIN packet.
-         */
         else if (packet.type == PACKET_FIN)
         {
             if (packet.flags != FLAG_FIN ||
@@ -269,17 +306,14 @@ int main()
                 continue;
             }
 
-            printf("Received FIN packet %u\n",
-                   packet.sequence_number);
+            printf(
+                "Received FIN packet %u\n",
+                packet.sequence_number);
 
             printf("File transfer completed.\n");
 
             break;
         }
-
-        /*
-         * ACK packets are not expected at receiver.
-         */
         else if (packet.type == PACKET_ACK)
         {
             printf("Unexpected ACK packet received\n");

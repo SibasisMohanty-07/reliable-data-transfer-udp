@@ -9,11 +9,12 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <sys/time.h>
+#include <sys/select.h>
 #endif
 
 #include "../include/protocol.h"
 #include "packet.h"
+#include "../include/gbn.h"
 
 #define SERVER_IP "127.0.0.1"
 #define SERVER_PORT 9000
@@ -48,10 +49,15 @@ int main(int argc, char *argv[])
 #ifdef _WIN32
         WSACleanup();
 #endif
+
         return 1;
     }
 
+#ifdef _WIN32
     SOCKET sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+#else
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+#endif
 
 #ifdef _WIN32
     if (sockfd == INVALID_SOCKET)
@@ -65,35 +71,9 @@ int main(int argc, char *argv[])
 #ifdef _WIN32
         WSACleanup();
 #endif
+
         return 1;
     }
-
-    /*
-     * Set receive timeout.
-     */
-#ifdef _WIN32
-    DWORD timeout = TIMEOUT_MS;
-
-    if (setsockopt(sockfd,
-                   SOL_SOCKET,
-                   SO_RCVTIMEO,
-                   (const char *)&timeout,
-                   sizeof(timeout)) < 0)
-    {
-        printf("Failed to set timeout\n");
-    }
-#else
-    struct timeval timeout;
-
-    timeout.tv_sec = 0;
-    timeout.tv_usec = TIMEOUT_MS * 1000;
-
-    setsockopt(sockfd,
-               SOL_SOCKET,
-               SO_RCVTIMEO,
-               &timeout,
-               sizeof(timeout));
-#endif
 
     struct sockaddr_in receiver_addr;
 
@@ -101,15 +81,14 @@ int main(int argc, char *argv[])
 
     receiver_addr.sin_family = AF_INET;
     receiver_addr.sin_port = htons(SERVER_PORT);
-
     receiver_addr.sin_addr.s_addr = inet_addr(SERVER_IP);
 
-if (receiver_addr.sin_addr.s_addr == INADDR_NONE)
-{
-    printf("Invalid IP address\n");
+    if (receiver_addr.sin_addr.s_addr == INADDR_NONE)
+    {
+        printf("Invalid IP address\n");
 
-    fclose(file);
-    
+        fclose(file);
+
 #ifdef _WIN32
         closesocket(sockfd);
         WSACleanup();
@@ -122,57 +101,76 @@ if (receiver_addr.sin_addr.s_addr == INADDR_NONE)
 
     printf("Sender started.\n");
 
-    char buffer[MAX_PAYLOAD_SIZE];
+    GBNState gbn;
 
+    gbn.base = 0;
+    gbn.next_seq = 0;
+    gbn.window_size = GBN_WINDOW_SIZE;
+    gbn.timer_running = false;
+    gbn.retransmissions = 0;
+
+    Packet window[GBN_WINDOW_SIZE];
+    int valid[GBN_WINDOW_SIZE];
+
+    memset(valid, 0, sizeof(valid));
+
+    char buffer[MAX_PAYLOAD_SIZE];
     uint8_t serialized_buffer[14 + MAX_PAYLOAD_SIZE];
+    uint8_t ack_buffer[14 + MAX_PAYLOAD_SIZE];
 
     uint32_t sequence_number = 0;
 
-    size_t bytes_read;
-
+    int eof = 0;
     int transfer_success = 1;
 
-    /*
-     * Stop-and-Wait DATA transmission.
-     */
-    while ((bytes_read = fread(buffer,
-                               1,
-                               MAX_PAYLOAD_SIZE,
-                               file)) > 0)
+    while (!eof || gbn.base < gbn.next_seq)
     {
-        Packet packet;
-
-        if (create_data_packet(&packet,
-                               sequence_number,
-                               buffer,
-                               (uint16_t)bytes_read) != 0)
+        while (!eof &&
+               gbn.next_seq < gbn.base + gbn.window_size)
         {
-            printf("Failed to create DATA packet\n");
-            transfer_success = 0;
-            break;
-        }
+            size_t bytes_read = fread(
+                buffer,
+                1,
+                MAX_PAYLOAD_SIZE,
+                file);
 
-        int serialized_size = serialize_packet(
-            &packet,
-            serialized_buffer,
-            sizeof(serialized_buffer));
+            if (bytes_read == 0)
+            {
+                eof = 1;
+                break;
+            }
 
-        if (serialized_size < 0)
-        {
-            printf("Failed to serialize DATA packet\n");
-            transfer_success = 0;
-            break;
-        }
+            Packet packet;
 
-        int acknowledged = 0;
-        int retry_count = 0;
+            if (create_data_packet(
+                    &packet,
+                    sequence_number,
+                    buffer,
+                    (uint16_t)bytes_read) != 0)
+            {
+                printf("Failed to create DATA packet\n");
+                transfer_success = 0;
+                break;
+            }
 
-        /*
-         * Stop-and-Wait:
-         * Send one packet and wait for its ACK.
-         */
-        while (!acknowledged && retry_count < MAX_RETRIES)
-        {
+            int index =
+                sequence_number % gbn.window_size;
+
+            window[index] = packet;
+            valid[index] = 1;
+
+            int serialized_size = serialize_packet(
+                &packet,
+                serialized_buffer,
+                sizeof(serialized_buffer));
+
+            if (serialized_size < 0)
+            {
+                printf("Failed to serialize DATA packet\n");
+                transfer_success = 0;
+                break;
+            }
+
             int sent = sendto(
                 sockfd,
                 (const char *)serialized_buffer,
@@ -188,18 +186,107 @@ if (receiver_addr.sin_addr.s_addr == INADDR_NONE)
 #endif
             {
                 printf("sendto failed\n");
-                retry_count++;
-                continue;
+                transfer_success = 0;
+                break;
             }
 
             printf("Sent DATA packet %u\n",
                    sequence_number);
 
-            /*
-             * Wait for ACK.
-             */
-            uint8_t ack_buffer[14 + MAX_PAYLOAD_SIZE];
+            gbn.next_seq++;
+            sequence_number++;
+        }
 
+        if (!transfer_success)
+            break;
+
+        if (gbn.base == gbn.next_seq)
+        {
+            gbn.timer_running = false;
+            continue;
+        }
+
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(sockfd, &readfds);
+
+        struct timeval tv;
+
+        tv.tv_sec = TIMEOUT_MS / 1000;
+        tv.tv_usec = (TIMEOUT_MS % 1000) * 1000;
+
+        int ready = select(
+            sockfd + 1,
+            &readfds,
+            NULL,
+            NULL,
+            &tv);
+
+#ifdef _WIN32
+        if (ready == SOCKET_ERROR)
+#else
+        if (ready < 0)
+#endif
+        {
+            printf("select failed\n");
+            transfer_success = 0;
+            break;
+        }
+
+        if (ready == 0)
+        {
+            gbn.retransmissions++;
+
+            printf("ACK timeout\n");
+
+            if (gbn.retransmissions > MAX_RETRIES)
+            {
+                printf("Maximum retransmissions reached\n");
+                transfer_success = 0;
+                break;
+            }
+
+            printf(
+                "Go-Back-N: retransmitting from packet %u\n",
+                gbn.base);
+
+            for (uint32_t seq = gbn.base;
+                 seq < gbn.next_seq;
+                 seq++)
+            {
+                int index = seq % gbn.window_size;
+
+                if (!valid[index])
+                    continue;
+
+                Packet *packet = &window[index];
+
+                int packet_size = serialize_packet(
+                    packet,
+                    serialized_buffer,
+                    sizeof(serialized_buffer));
+
+                if (packet_size > 0)
+                {
+                    sendto(
+                        sockfd,
+                        (const char *)serialized_buffer,
+                        packet_size,
+                        0,
+                        (struct sockaddr *)&receiver_addr,
+                        sizeof(receiver_addr));
+
+                    printf(
+                        "Retransmitted DATA packet %u\n",
+                        packet->sequence_number);
+                }
+            }
+
+            continue;
+        }
+
+        if (FD_ISSET(sockfd, &readfds))
+        {
             struct sockaddr_in ack_addr;
 
 #ifdef _WIN32
@@ -218,74 +305,44 @@ if (receiver_addr.sin_addr.s_addr == INADDR_NONE)
 
 #ifdef _WIN32
             if (received == SOCKET_ERROR)
-            {
-                printf("Timeout. Retransmitting DATA packet %u\n",
-                       sequence_number);
-
-                retry_count++;
-                continue;
-            }
 #else
             if (received < 0)
+#endif
             {
-                printf("Timeout. Retransmitting DATA packet %u\n",
-                       sequence_number);
-
-                retry_count++;
+                printf("recvfrom failed\n");
                 continue;
             }
-#endif
 
             Packet ack_packet;
 
-            if (parse_packet(ack_buffer,
-                             received,
-                             &ack_packet) != 0)
+            if (parse_packet(
+                    ack_buffer,
+                    received,
+                    &ack_packet) == 0 &&
+                verify_checksum(&ack_packet) &&
+                ack_packet.type == PACKET_ACK)
             {
-                printf("Invalid ACK packet\n");
-                continue;
-            }
+                uint32_t ack_number =
+                    ack_packet.acknowledgement_number;
 
-            /*
-             * Verify ACK checksum.
-             */
-            if (!verify_checksum(&ack_packet))
-            {
-                printf("Invalid ACK checksum\n");
-                continue;
-            }
+                if (ack_number >= gbn.base &&
+                    ack_number < gbn.next_seq)
+                {
+                    gbn.base = ack_number + 1;
 
-            /*
-             * Check ACK packet.
-             */
-            if (ack_packet.type == PACKET_ACK &&
-                ack_packet.acknowledgement_number == sequence_number)
-            {
-                printf("Received ACK for DATA packet %u\n",
-                       sequence_number);
+                    printf(
+                        "Received cumulative ACK for packet %u\n",
+                        ack_number);
 
-                acknowledged = 1;
-            }
-            else
-            {
-                printf("Wrong ACK received\n");
+                    gbn.retransmissions = 0;
+
+                    if (gbn.base == gbn.next_seq)
+                        gbn.timer_running = false;
+                    else
+                        gbn.timer_running = true;
+                }
             }
         }
-
-        if (!acknowledged)
-        {
-            printf("Maximum retries reached for packet %u\n",
-                   sequence_number);
-
-            transfer_success = 0;
-            break;
-        }
-
-        /*
-         * Move to next sequence number only
-         * after receiving correct ACK.
-         */
-        sequence_number++;
     }
 
     if (ferror(file))
@@ -294,22 +351,30 @@ if (receiver_addr.sin_addr.s_addr == INADDR_NONE)
         transfer_success = 0;
     }
 
-    /*
-     * Send FIN after all DATA packets are acknowledged.
-     */
     if (transfer_success)
     {
         Packet fin_packet;
 
-        if (create_fin_packet(&fin_packet,
-                              sequence_number) == 0)
+        if (create_fin_packet(
+                &fin_packet,
+                sequence_number) != 0)
+        {
+            printf("Failed to create FIN packet\n");
+            transfer_success = 0;
+        }
+        else
         {
             int fin_size = serialize_packet(
                 &fin_packet,
                 serialized_buffer,
                 sizeof(serialized_buffer));
 
-            if (fin_size > 0)
+            if (fin_size <= 0)
+            {
+                printf("Failed to serialize FIN packet\n");
+                transfer_success = 0;
+            }
+            else
             {
                 int sent = sendto(
                     sockfd,
@@ -320,18 +385,19 @@ if (receiver_addr.sin_addr.s_addr == INADDR_NONE)
                     sizeof(receiver_addr));
 
 #ifdef _WIN32
-                if (sent != SOCKET_ERROR)
+                if (sent == SOCKET_ERROR)
 #else
-                if (sent >= 0)
+                if (sent < 0)
 #endif
-                {
-                    printf("Sent FIN packet %u\n",
-                           sequence_number);
-                }
-                else
                 {
                     printf("Failed to send FIN\n");
                     transfer_success = 0;
+                }
+                else
+                {
+                    printf(
+                        "Sent FIN packet %u\n",
+                        sequence_number);
                 }
             }
         }

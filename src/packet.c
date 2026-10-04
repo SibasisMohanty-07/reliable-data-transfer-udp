@@ -1,6 +1,11 @@
 #include "packet.h"
 #include <string.h>
+
+#ifdef _WIN32
 #include <winsock2.h>
+#else
+#include <arpa/inet.h>
+#endif
 
 void initialize_packet(Packet *packet)
 {
