@@ -24,5 +24,15 @@ typedef struct
     uint32_t next_seq;
     uint32_t window_size;
 } SRState;
+/* Week 4: Selective Repeat ARQ */
+
+/* Receiver buffering for out-of-order packets */
+#define SR_RECEIVER_BUFFER_SIZE SR_WINDOW_SIZE
+
+/* Individual acknowledgement support */
+#define SR_INDIVIDUAL_ACK 1
+
+/* Selective retransmission support */
+#define SR_SELECTIVE_RETRANSMISSION 1
 
 #endif
