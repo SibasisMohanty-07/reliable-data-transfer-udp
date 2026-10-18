@@ -1,8 +1,11 @@
+
 #include "packet.h"
 #include "../include/sr.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -19,11 +22,24 @@ typedef int socket_t;
 
 #define SERVER_PORT 9000
 #define OUTPUT_FILE "received_sr.txt"
+#define SIMULATE_LOST_ACK_SEQ 2
 
 static int send_individual_ack(socket_t sock,
                                const struct sockaddr_in *client,
                                uint32_t sequence)
 {
+    /* Simulate losing the first ACK for sequence 2. */
+    static int lost_ack_simulated = 0;
+
+    if (sequence == SIMULATE_LOST_ACK_SEQ &&
+        !lost_ack_simulated)
+    {
+        lost_ack_simulated = 1;
+        printf("SIMULATION: Dropped ACK for seq=%u\n",
+               sequence);
+        return 0;
+    }
+
     Packet ack;
     uint8_t buffer[14 + MAX_PAYLOAD_SIZE];
 
@@ -36,6 +52,7 @@ static int send_individual_ack(socket_t sock,
     ack.checksum = calculate_checksum(&ack);
 
     int length = serialize_packet(&ack, buffer, sizeof(buffer));
+
     if (length < 0)
         return -1;
 
@@ -52,6 +69,7 @@ int main(void)
 {
 #ifdef _WIN32
     WSADATA wsa;
+
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
     {
         fprintf(stderr, "Winsock initialization failed\n");
@@ -76,11 +94,13 @@ int main(void)
 
     struct sockaddr_in server;
     memset(&server, 0, sizeof(server));
+
     server.sin_family = AF_INET;
     server.sin_addr.s_addr = htonl(INADDR_ANY);
     server.sin_port = htons(SERVER_PORT);
 
-    if (bind(sock, (struct sockaddr *)&server, sizeof(server)) < 0)
+    if (bind(sock, (struct sockaddr *)&server,
+             sizeof(server)) < 0)
     {
         perror("Bind failed");
         CLOSE_SOCKET(sock);
@@ -91,6 +111,7 @@ int main(void)
     }
 
     FILE *output = fopen(OUTPUT_FILE, "wb");
+
     if (!output)
     {
         perror("Cannot open output file");
@@ -119,8 +140,9 @@ int main(void)
         socklen_t client_len = sizeof(client);
 #endif
 
-        int received = recvfrom(sock, (char *)raw, sizeof(raw), 0,
-                                (struct sockaddr *)&client, &client_len);
+        int received = recvfrom(
+            sock, (char *)raw, sizeof(raw), 0,
+            (struct sockaddr *)&client, &client_len);
 
         if (received < 0)
         {
@@ -129,6 +151,7 @@ int main(void)
         }
 
         Packet packet;
+
         if (parse_packet(raw, (size_t)received, &packet) != 0 ||
             !verify_checksum(&packet))
         {
@@ -155,7 +178,7 @@ int main(void)
 
         uint32_t seq = packet.sequence_number;
 
-        /* Already delivered: ACK the duplicate again. */
+        /* Already delivered: acknowledge the duplicate again. */
         if (seq < expected)
         {
             printf("Duplicate DATA seq=%u\n", seq);
@@ -163,7 +186,7 @@ int main(void)
             continue;
         }
 
-        /* Accept packets within the receiver's window. */
+        /* Accept packets inside the receiver's window. */
         if (seq >= expected &&
             seq < expected + SR_WINDOW_SIZE)
         {
@@ -173,6 +196,7 @@ int main(void)
             {
                 buffer[index] = packet;
                 occupied[index] = 1;
+
                 printf("Buffered DATA seq=%u\n", seq);
             }
             else if (buffer[index].sequence_number != seq)
@@ -185,12 +209,13 @@ int main(void)
             if (send_individual_ack(sock, &client, seq) != 0)
                 perror("ACK send failed");
 
-            /* Write only consecutive packets, in order. */
+            /* Deliver buffered packets only in sequence order. */
             while (occupied[expected % SR_WINDOW_SIZE] &&
                    buffer[expected % SR_WINDOW_SIZE].sequence_number
                        == expected)
             {
-                Packet *ready = &buffer[expected % SR_WINDOW_SIZE];
+                Packet *ready =
+                    &buffer[expected % SR_WINDOW_SIZE];
 
                 if (fwrite(ready->payload, 1,
                            ready->payload_length, output)
@@ -205,7 +230,8 @@ int main(void)
                     return 1;
                 }
 
-                printf("Delivered DATA seq=%u to file\n", expected);
+                printf("Delivered DATA seq=%u to file", expected);
+                printf("\n");
 
                 occupied[expected % SR_WINDOW_SIZE] = 0;
                 expected++;

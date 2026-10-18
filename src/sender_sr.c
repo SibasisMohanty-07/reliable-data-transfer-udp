@@ -60,7 +60,8 @@ static int send_packet(socket_t sock,
 
 static int send_acknowledged_data(socket_t sock,
                                   const struct sockaddr_in *server,
-                                  FILE *input)
+                                  FILE *input,
+                                  uint32_t *total_packets)
 {
     SRSlot slots[SR_WINDOW_SIZE] = {0};
     uint32_t base = 0;
@@ -197,7 +198,7 @@ static int send_acknowledged_data(socket_t sock,
             }
         }
     }
-
+*total_packets = next_seq;
     return 0;
 }
 
@@ -261,13 +262,15 @@ int main(int argc, char *argv[])
 
     printf("Selective Repeat sender started.\n");
 
-    int result = send_acknowledged_data(sock, &server, input);
+    uint32_t total_packets = 0;
+    int result = send_acknowledged_data(
+    sock, &server, input, &total_packets);
 
     if (result == 0)
     {
         Packet fin;
 
-        if (create_fin_packet(&fin, 0) != 0 ||
+        if (create_fin_packet(&fin, total_packets)gcc -Wall -Wextra -std=c11 -D_POSIX_C_SOURCE=200809L -Iinclude -Isrc src/sender_sr.c src/packet.c -o sender_sr != 0 ||
             send_packet(sock, &server, &fin) != 0)
         {
             fprintf(stderr, "Failed to send FIN packet\n");
