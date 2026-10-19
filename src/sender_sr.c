@@ -25,7 +25,7 @@ typedef int socket_t;
 #endif
 
 #define SERVER_IP "127.0.0.1"
-#define SERVER_PORT 9000
+#define SERVER_PORT 9001
 #define RECEIVE_TIMEOUT_MS 100
 
 static uint64_t now_ms(void)
@@ -45,6 +45,7 @@ static int send_packet(socket_t sock,
                        const Packet *packet)
 {
     uint8_t buffer[14 + MAX_PAYLOAD_SIZE];
+
     int length = serialize_packet(packet, buffer, sizeof(buffer));
 
     if (length < 0)
@@ -79,12 +80,12 @@ static int send_acknowledged_data(socket_t sock,
             {
                 if (ferror(input))
                     return -1;
+
                 eof = 1;
                 break;
             }
 
             SRSlot *slot = &slots[next_seq % SR_WINDOW_SIZE];
-
             memset(slot, 0, sizeof(*slot));
 
             if (create_data_packet(&slot->packet, next_seq,
@@ -96,7 +97,11 @@ static int send_acknowledged_data(socket_t sock,
             slot->retries = 0;
 
             if (send_packet(sock, server, &slot->packet) != 0)
+            {
+                fprintf(stderr, "Failed to send DATA seq=%u\n",
+                        next_seq);
                 return -1;
+            }
 
             slot->last_sent_ms = now_ms();
 
@@ -114,26 +119,36 @@ static int send_acknowledged_data(socket_t sock,
         tv.tv_sec = 0;
         tv.tv_usec = RECEIVE_TIMEOUT_MS * 1000;
 
-        int ready = select((int)(sock + 1), &readfds,
-                           NULL, NULL, &tv);
+#ifdef _WIN32
+        int ready = select(0, &readfds, NULL, NULL, &tv);
+#else
+        int ready = select(sock + 1, &readfds, NULL, NULL, &tv);
+#endif
+
+        if (ready < 0)
+        {
+            fprintf(stderr, "select() failed\n");
+            return -1;
+        }
 
         if (ready > 0 && FD_ISSET(sock, &readfds))
         {
             uint8_t buffer[14 + MAX_PAYLOAD_SIZE];
             struct sockaddr_in from;
+
 #ifdef _WIN32
             int from_len = sizeof(from);
 #else
             socklen_t from_len = sizeof(from);
 #endif
-            int received = recvfrom(sock, (char *)buffer,
-                                    sizeof(buffer), 0,
-                                    (struct sockaddr *)&from,
-                                    &from_len);
+
+            int received = recvfrom(
+                sock, (char *)buffer, sizeof(buffer), 0,
+                (struct sockaddr *)&from, &from_len);
 
             Packet ack;
 
-            if (received >= 0 &&
+            if (received > 0 &&
                 parse_packet(buffer, (size_t)received, &ack) == 0 &&
                 verify_checksum(&ack) &&
                 ack.type == PACKET_ACK)
@@ -148,6 +163,7 @@ static int send_acknowledged_data(socket_t sock,
                         slot->packet.sequence_number == seq)
                     {
                         slot->acknowledged = true;
+
                         printf("Received individual ACK for seq=%u\n",
                                seq);
                     }
@@ -155,8 +171,7 @@ static int send_acknowledged_data(socket_t sock,
 
                 while (base < next_seq)
                 {
-                    SRSlot *first =
-                        &slots[base % SR_WINDOW_SIZE];
+                    SRSlot *first = &slots[base % SR_WINDOW_SIZE];
 
                     if (!first->valid ||
                         first->packet.sequence_number != base ||
@@ -187,7 +202,11 @@ static int send_acknowledged_data(socket_t sock,
                 }
 
                 if (send_packet(sock, server, &slot->packet) != 0)
+                {
+                    fprintf(stderr,
+                            "Failed to retransmit DATA seq=%u\n", seq);
                     return -1;
+                }
 
                 slot->last_sent_ms = now;
                 slot->retries++;
@@ -198,7 +217,8 @@ static int send_acknowledged_data(socket_t sock,
             }
         }
     }
-*total_packets = next_seq;
+
+    *total_packets = next_seq;
     return 0;
 }
 
@@ -212,7 +232,7 @@ int main(int argc, char *argv[])
 
     FILE *input = fopen(argv[1], "rb");
 
-    if (!input)
+    if (input == NULL)
     {
         perror("Cannot open input file");
         return 1;
@@ -220,6 +240,7 @@ int main(int argc, char *argv[])
 
 #ifdef _WIN32
     WSADATA wsa;
+
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
     {
         fprintf(stderr, "Winsock initialization failed\n");
@@ -236,7 +257,7 @@ int main(int argc, char *argv[])
     if (sock < 0)
 #endif
     {
-        perror("Socket creation failed");
+        fprintf(stderr, "Socket creation failed\n");
         fclose(input);
 #ifdef _WIN32
         WSACleanup();
@@ -246,6 +267,7 @@ int main(int argc, char *argv[])
 
     struct sockaddr_in server;
     memset(&server, 0, sizeof(server));
+
     server.sin_family = AF_INET;
     server.sin_port = htons(SERVER_PORT);
 
@@ -261,16 +283,19 @@ int main(int argc, char *argv[])
     }
 
     printf("Selective Repeat sender started.\n");
+    printf("Sending through channel proxy at %s:%d\n",
+           SERVER_IP, SERVER_PORT);
 
     uint32_t total_packets = 0;
+
     int result = send_acknowledged_data(
-    sock, &server, input, &total_packets);
+        sock, &server, input, &total_packets);
 
     if (result == 0)
     {
         Packet fin;
 
-        if (create_fin_packet(&fin, total_packets)gcc -Wall -Wextra -std=c11 -D_POSIX_C_SOURCE=200809L -Iinclude -Isrc src/sender_sr.c src/packet.c -o sender_sr != 0 ||
+        if (create_fin_packet(&fin, total_packets) != 0 ||
             send_packet(sock, &server, &fin) != 0)
         {
             fprintf(stderr, "Failed to send FIN packet\n");
