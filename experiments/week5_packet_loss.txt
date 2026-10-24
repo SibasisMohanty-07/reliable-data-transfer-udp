@@ -1,0 +1,17 @@
+Week 5: Selective Repeat ARQ Packet-Loss Experiment
+
+Setup:
+- Sender sends packets to UDP relay on port 9001.
+- UDP relay forwards packets to receiver on port 9000.
+- First DATA packet is deliberately dropped by the relay.
+
+Observed results:
+- Relay dropped the first DATA packet.
+- Sender retransmitted DATA seq=0 after timeout.
+- Receiver acknowledged and delivered DATA seq=0.
+- Sender received the ACK and sent FIN.
+- cmp data/test.txt received_sr.txt returned no differences.
+
+Conclusion:
+Selective Repeat successfully recovered from simulated packet loss
+through timeout-based retransmission of the missing packet.

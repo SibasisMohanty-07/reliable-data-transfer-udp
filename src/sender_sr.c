@@ -25,7 +25,7 @@ typedef int socket_t;
 #endif
 
 #define SERVER_IP "127.0.0.1"
-#define SERVER_PORT 9000
+#define SERVER_PORT 9001
 #define RECEIVE_TIMEOUT_MS 100
 
 static uint64_t now_ms(void)
