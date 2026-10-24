@@ -266,11 +266,11 @@ int main(int argc, char *argv[])
     int result = send_acknowledged_data(
     sock, &server, input, &total_packets);
 
-    if (result == 0)
+              if (result == 0)
     {
         Packet fin;
 
-        if (create_fin_packet(&fin, total_packets)gcc -Wall -Wextra -std=c11 -D_POSIX_C_SOURCE=200809L -Iinclude -Isrc src/sender_sr.c src/packet.c -o sender_sr != 0 ||
+        if (create_fin_packet(&fin, total_packets) != 0 ||
             send_packet(sock, &server, &fin) != 0)
         {
             fprintf(stderr, "Failed to send FIN packet\n");
