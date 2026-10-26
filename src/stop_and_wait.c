@@ -29,14 +29,13 @@ int stop_and_wait_send(
         sizeof(buffer)
     );
 
-    if (packet_size < 0)
-    {
+    if (packet_size <= 0) {
         printf("Packet serialization failed\n");
         return -1;
     }
 
-    for (int attempt = 1; attempt <= MAX_RETRIES; attempt++)
-    {
+    for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+
         int sent = sendto(
             sockfd,
             (const char *)buffer,
@@ -46,8 +45,7 @@ int stop_and_wait_send(
             sizeof(*receiver_addr)
         );
 
-        if (sent < 0)
-        {
+        if (sent < 0) {
             printf("Failed to send DATA packet\n");
             return -1;
         }
@@ -58,43 +56,54 @@ int stop_and_wait_send(
             attempt
         );
 
-        fd_set readfds;
-        FD_ZERO(&readfds);
-        FD_SET(sockfd, &readfds);
+        /*
+         * Keep listening after stale or duplicate ACKs.
+         * Only retransmit when the ACK timeout expires.
+         */
+        time_t deadline = time(NULL) + TIMEOUT_SEC;
 
-        struct timeval timeout;
-        timeout.tv_sec = TIMEOUT_SEC;
-        timeout.tv_usec = 0;
+        while (1) {
+            time_t now = time(NULL);
+            time_t remaining = deadline - now;
 
-        int result = select(
-            (int)sockfd + 1,
-            &readfds,
-            NULL,
-            NULL,
-            &timeout
-        );
+            if (remaining <= 0) {
+                printf(
+                    "Timeout for packet %u\n",
+                    packet->sequence_number
+                );
+                break;
+            }
 
-        if (result == 0)
-        {
-            printf(
-                "Timeout for packet %u\n",
-                packet->sequence_number
+            fd_set readfds;
+            FD_ZERO(&readfds);
+            FD_SET(sockfd, &readfds);
+
+            struct timeval timeout;
+            timeout.tv_sec = (long)remaining;
+            timeout.tv_usec = 0;
+
+            int result = select(
+                (int)sockfd + 1,
+                &readfds,
+                NULL,
+                NULL,
+                &timeout
             );
 
-            printf("Retransmitting...\n");
-            continue;
-        }
+            if (result == 0) {
+                printf(
+                    "Timeout for packet %u\n",
+                    packet->sequence_number
+                );
+                break;
+            }
 
-        if (result < 0)
-        {
-            printf("select() failed\n");
-            return -1;
-        }
+            if (result < 0) {
+                printf("select() failed\n");
+                return -1;
+            }
 
-        if (FD_ISSET(sockfd, &readfds))
-        {
             uint8_t ack_buffer[14 + MAX_PAYLOAD_SIZE];
-
             struct sockaddr_in ack_addr;
 
 #ifdef _WIN32
@@ -112,9 +121,8 @@ int stop_and_wait_send(
                 &ack_len
             );
 
-            if (received < 0)
-            {
-                printf("Failed to receive ACK\n");
+            if (received < 0) {
+                printf("Failed to receive ACK; continuing\n");
                 continue;
             }
 
@@ -122,23 +130,25 @@ int stop_and_wait_send(
 
             if (parse_packet(
                     ack_buffer,
-                    received,
-                    &ack) != 0)
-            {
-                printf("Invalid ACK packet\n");
+                    (size_t)received,
+                    &ack) != 0) {
+                printf("Invalid ACK packet; ignoring\n");
                 continue;
             }
 
-            if (!verify_checksum(&ack))
-            {
-                printf("Invalid ACK checksum\n");
+            if (!verify_checksum(&ack)) {
+                printf("Invalid ACK checksum; ignoring\n");
                 continue;
             }
 
-            if (ack.type == PACKET_ACK &&
-                ack.acknowledgement_number ==
-                    packet->sequence_number)
-            {
+            if (ack.type != PACKET_ACK) {
+                printf("Non-ACK packet received; ignoring\n");
+                continue;
+            }
+
+            if (ack.acknowledgement_number ==
+                packet->sequence_number) {
+
                 printf(
                     "Received ACK for DATA packet %u\n",
                     packet->sequence_number
@@ -147,8 +157,20 @@ int stop_and_wait_send(
                 return 0;
             }
 
-            printf("Wrong ACK received\n");
+            /*
+             * A duplicate or stale ACK must not consume a retry.
+             * Continue waiting for the correct ACK until the
+             * original timeout expires.
+             */
+            printf(
+                "Ignoring stale ACK %u while waiting for ACK %u\n",
+                ack.acknowledgement_number,
+                packet->sequence_number
+            );
         }
+
+        printf("Retransmitting DATA packet %u\n",
+               packet->sequence_number);
     }
 
     printf(
