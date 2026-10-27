@@ -45,11 +45,9 @@ int main(int argc, char *argv[])
     if (file == NULL)
     {
         perror("Error opening input file");
-
 #ifdef _WIN32
         WSACleanup();
 #endif
-
         return 1;
     }
 
@@ -67,16 +65,13 @@ int main(int argc, char *argv[])
     {
         printf("Socket creation failed\n");
         fclose(file);
-
 #ifdef _WIN32
         WSACleanup();
 #endif
-
         return 1;
     }
 
     struct sockaddr_in receiver_addr;
-
     memset(&receiver_addr, 0, sizeof(receiver_addr));
 
     receiver_addr.sin_family = AF_INET;
@@ -86,23 +81,19 @@ int main(int argc, char *argv[])
     if (receiver_addr.sin_addr.s_addr == INADDR_NONE)
     {
         printf("Invalid IP address\n");
-
         fclose(file);
-
 #ifdef _WIN32
         closesocket(sockfd);
         WSACleanup();
 #else
         close(sockfd);
 #endif
-
         return 1;
     }
 
     printf("Sender started.\n");
 
     GBNState gbn;
-
     gbn.base = 0;
     gbn.next_seq = 0;
     gbn.window_size = GBN_WINDOW_SIZE;
@@ -111,7 +102,6 @@ int main(int argc, char *argv[])
 
     Packet window[GBN_WINDOW_SIZE];
     int valid[GBN_WINDOW_SIZE];
-
     memset(valid, 0, sizeof(valid));
 
     char buffer[MAX_PAYLOAD_SIZE];
@@ -119,7 +109,6 @@ int main(int argc, char *argv[])
     uint8_t ack_buffer[14 + MAX_PAYLOAD_SIZE];
 
     uint32_t sequence_number = 0;
-
     int eof = 0;
     int transfer_success = 1;
 
@@ -129,10 +118,7 @@ int main(int argc, char *argv[])
                gbn.next_seq < gbn.base + gbn.window_size)
         {
             size_t bytes_read = fread(
-                buffer,
-                1,
-                MAX_PAYLOAD_SIZE,
-                file);
+                buffer, 1, MAX_PAYLOAD_SIZE, file);
 
             if (bytes_read == 0)
             {
@@ -143,9 +129,7 @@ int main(int argc, char *argv[])
             Packet packet;
 
             if (create_data_packet(
-                    &packet,
-                    sequence_number,
-                    buffer,
+                    &packet, sequence_number, buffer,
                     (uint16_t)bytes_read) != 0)
             {
                 printf("Failed to create DATA packet\n");
@@ -153,18 +137,14 @@ int main(int argc, char *argv[])
                 break;
             }
 
-            int index =
-                sequence_number % gbn.window_size;
-
+            int index = sequence_number % gbn.window_size;
             window[index] = packet;
             valid[index] = 1;
 
             int serialized_size = serialize_packet(
-                &packet,
-                serialized_buffer,
-                sizeof(serialized_buffer));
+                &packet, serialized_buffer, sizeof(serialized_buffer));
 
-            if (serialized_size < 0)
+            if (serialized_size <= 0)
             {
                 printf("Failed to serialize DATA packet\n");
                 transfer_success = 0;
@@ -172,10 +152,8 @@ int main(int argc, char *argv[])
             }
 
             int sent = sendto(
-                sockfd,
-                (const char *)serialized_buffer,
-                serialized_size,
-                0,
+                sockfd, (const char *)serialized_buffer,
+                serialized_size, 0,
                 (struct sockaddr *)&receiver_addr,
                 sizeof(receiver_addr));
 
@@ -190,9 +168,7 @@ int main(int argc, char *argv[])
                 break;
             }
 
-            printf("Sent DATA packet %u\n",
-                   sequence_number);
-
+            printf("Sent DATA packet %u\n", sequence_number);
             gbn.next_seq++;
             sequence_number++;
         }
@@ -211,16 +187,10 @@ int main(int argc, char *argv[])
         FD_SET(sockfd, &readfds);
 
         struct timeval tv;
-
         tv.tv_sec = TIMEOUT_MS / 1000;
         tv.tv_usec = (TIMEOUT_MS % 1000) * 1000;
 
-        int ready = select(
-            sockfd + 1,
-            &readfds,
-            NULL,
-            NULL,
-            &tv);
+        int ready = select(sockfd + 1, &readfds, NULL, NULL, &tv);
 
 #ifdef _WIN32
         if (ready == SOCKET_ERROR)
@@ -236,7 +206,6 @@ int main(int argc, char *argv[])
         if (ready == 0)
         {
             gbn.retransmissions++;
-
             printf("ACK timeout\n");
 
             if (gbn.retransmissions > MAX_RETRIES)
@@ -246,13 +215,11 @@ int main(int argc, char *argv[])
                 break;
             }
 
-            printf(
-                "Go-Back-N: retransmitting from packet %u\n",
-                gbn.base);
+            printf("Go-Back-N: retransmitting from packet %u\n",
+                   gbn.base);
 
             for (uint32_t seq = gbn.base;
-                 seq < gbn.next_seq;
-                 seq++)
+                 seq < gbn.next_seq; seq++)
             {
                 int index = seq % gbn.window_size;
 
@@ -262,23 +229,19 @@ int main(int argc, char *argv[])
                 Packet *packet = &window[index];
 
                 int packet_size = serialize_packet(
-                    packet,
-                    serialized_buffer,
+                    packet, serialized_buffer,
                     sizeof(serialized_buffer));
 
                 if (packet_size > 0)
                 {
                     sendto(
-                        sockfd,
-                        (const char *)serialized_buffer,
-                        packet_size,
-                        0,
+                        sockfd, (const char *)serialized_buffer,
+                        packet_size, 0,
                         (struct sockaddr *)&receiver_addr,
                         sizeof(receiver_addr));
 
-                    printf(
-                        "Retransmitted DATA packet %u\n",
-                        packet->sequence_number);
+                    printf("Retransmitted DATA packet %u\n",
+                           packet->sequence_number);
                 }
             }
 
@@ -288,7 +251,6 @@ int main(int argc, char *argv[])
         if (FD_ISSET(sockfd, &readfds))
         {
             struct sockaddr_in ack_addr;
-
 #ifdef _WIN32
             int ack_addr_len = sizeof(ack_addr);
 #else
@@ -296,12 +258,8 @@ int main(int argc, char *argv[])
 #endif
 
             int received = recvfrom(
-                sockfd,
-                (char *)ack_buffer,
-                sizeof(ack_buffer),
-                0,
-                (struct sockaddr *)&ack_addr,
-                &ack_addr_len);
+                sockfd, (char *)ack_buffer, sizeof(ack_buffer), 0,
+                (struct sockaddr *)&ack_addr, &ack_addr_len);
 
 #ifdef _WIN32
             if (received == SOCKET_ERROR)
@@ -316,8 +274,7 @@ int main(int argc, char *argv[])
             Packet ack_packet;
 
             if (parse_packet(
-                    ack_buffer,
-                    received,
+                    ack_buffer, (size_t)received,
                     &ack_packet) == 0 &&
                 verify_checksum(&ack_packet) &&
                 ack_packet.type == PACKET_ACK)
@@ -330,16 +287,11 @@ int main(int argc, char *argv[])
                 {
                     gbn.base = ack_number + 1;
 
-                    printf(
-                        "Received cumulative ACK for packet %u\n",
-                        ack_number);
+                    printf("Received cumulative ACK for packet %u\n",
+                           ack_number);
 
                     gbn.retransmissions = 0;
-
-                    if (gbn.base == gbn.next_seq)
-                        gbn.timer_running = false;
-                    else
-                        gbn.timer_running = true;
+                    gbn.timer_running = (gbn.base != gbn.next_seq);
                 }
             }
         }
@@ -351,13 +303,16 @@ int main(int argc, char *argv[])
         transfer_success = 0;
     }
 
+    /*
+     * FIN handshake:
+     * Send FIN and wait for an ACK that acknowledges its sequence number.
+     * Retry FIN on timeout or an invalid/unrelated ACK.
+     */
     if (transfer_success)
     {
         Packet fin_packet;
 
-        if (create_fin_packet(
-                &fin_packet,
-                sequence_number) != 0)
+        if (create_fin_packet(&fin_packet, sequence_number) != 0)
         {
             printf("Failed to create FIN packet\n");
             transfer_success = 0;
@@ -376,28 +331,111 @@ int main(int argc, char *argv[])
             }
             else
             {
-                int sent = sendto(
-                    sockfd,
-                    (const char *)serialized_buffer,
-                    fin_size,
-                    0,
-                    (struct sockaddr *)&receiver_addr,
-                    sizeof(receiver_addr));
+                int fin_ack_received = 0;
+
+                for (int attempt = 1;
+                     attempt <= MAX_RETRIES && !fin_ack_received;
+                     attempt++)
+                {
+                    int sent = sendto(
+                        sockfd,
+                        (const char *)serialized_buffer,
+                        fin_size,
+                        0,
+                        (struct sockaddr *)&receiver_addr,
+                        sizeof(receiver_addr));
 
 #ifdef _WIN32
-                if (sent == SOCKET_ERROR)
+                    if (sent == SOCKET_ERROR)
 #else
-                if (sent < 0)
+                    if (sent < 0)
 #endif
-                {
-                    printf("Failed to send FIN\n");
-                    transfer_success = 0;
+                    {
+                        printf("Failed to send FIN\n");
+                        transfer_success = 0;
+                        break;
+                    }
+
+                    printf("Sent FIN packet %u (attempt %d)\n",
+                           sequence_number, attempt);
+
+                    fd_set fin_readfds;
+                    FD_ZERO(&fin_readfds);
+                    FD_SET(sockfd, &fin_readfds);
+
+                    struct timeval fin_tv;
+                    fin_tv.tv_sec = TIMEOUT_MS / 1000;
+                    fin_tv.tv_usec = (TIMEOUT_MS % 1000) * 1000;
+
+                    int fin_ready = select(
+                        sockfd + 1, &fin_readfds, NULL, NULL, &fin_tv);
+
+#ifdef _WIN32
+                    if (fin_ready == SOCKET_ERROR)
+#else
+                    if (fin_ready < 0)
+#endif
+                    {
+                        printf("select failed while waiting for FIN ACK\n");
+                        transfer_success = 0;
+                        break;
+                    }
+
+                    if (fin_ready == 0)
+                    {
+                        printf("FIN ACK timeout\n");
+                        continue;
+                    }
+
+                    struct sockaddr_in fin_ack_addr;
+#ifdef _WIN32
+                    int fin_ack_addr_len = sizeof(fin_ack_addr);
+#else
+                    socklen_t fin_ack_addr_len = sizeof(fin_ack_addr);
+#endif
+
+                    int ack_received = recvfrom(
+                        sockfd,
+                        (char *)ack_buffer,
+                        sizeof(ack_buffer),
+                        0,
+                        (struct sockaddr *)&fin_ack_addr,
+                        &fin_ack_addr_len);
+
+#ifdef _WIN32
+                    if (ack_received == SOCKET_ERROR)
+#else
+                    if (ack_received < 0)
+#endif
+                    {
+                        printf("Failed to receive FIN ACK\n");
+                        continue;
+                    }
+
+                    Packet fin_ack_packet;
+
+                    if (parse_packet(
+                            ack_buffer, (size_t)ack_received,
+                            &fin_ack_packet) == 0 &&
+                        verify_checksum(&fin_ack_packet) &&
+                        fin_ack_packet.type == PACKET_ACK &&
+                        fin_ack_packet.acknowledgement_number ==
+                            sequence_number)
+                    {
+                        fin_ack_received = 1;
+                        printf("Received FIN ACK for packet %u\n",
+                               sequence_number);
+                    }
+                    else
+                    {
+                        printf("Invalid or unrelated ACK received\n");
+                    }
                 }
-                else
+
+                if (!fin_ack_received)
                 {
-                    printf(
-                        "Sent FIN packet %u\n",
-                        sequence_number);
+                    printf("FIN handshake failed: no valid FIN ACK received\n");
+                    transfer_success = 0;
                 }
             }
         }
